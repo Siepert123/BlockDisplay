@@ -12,7 +12,7 @@ import net.minecraftforge.fml.common.network.simpleimpl.SimpleNetworkWrapper;
 import net.minecraftforge.fml.relauncher.Side;
 import org.apache.logging.log4j.Logger;
 
-@Mod(modid = BlockDisplay.MODID, name = BlockDisplay.NAME, version = BlockDisplay.VERSION)
+@Mod(modid = BlockDisplay.MODID, name = BlockDisplay.NAME, version = BlockDisplay.VERSION, dependencies = "required-after:melonlib@[1.2,)")
 public class BlockDisplay
 {
     public static final String MODID = "block_display";
