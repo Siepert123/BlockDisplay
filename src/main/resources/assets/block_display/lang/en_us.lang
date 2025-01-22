@@ -1,0 +1,12 @@
+info.block_display.sign_text=Sign Text
+info.block_display.has_te=Has TileEntity
+info.block_display.entity=Entity
+info.block_display.entity_wip=[ENTITIES ARE WIP]
+info.block_display.inventory=Inventory
+info.block_display.inventory_warn=Inventory may not display correctly
+
+entity.ItemFrame.name=Item Frame
+entity.LeashKnot.name=Leash Knot
+entity.MinecartRideable.name=Minecart
+entity.MinecartFurnace.name=Minecart with Furnace
+entity.MinecartTNT.name=Minecart with TNT
