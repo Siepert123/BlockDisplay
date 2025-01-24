@@ -16,19 +16,27 @@ import net.minecraft.client.renderer.RenderHelper;
 import net.minecraft.client.renderer.RenderItem;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityLiving;
+import net.minecraft.init.Items;
 import net.minecraft.inventory.IInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.tileentity.TileEntity;
+import net.minecraft.util.EnumHand;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.RayTraceResult;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraftforge.client.event.GuiScreenEvent;
 import net.minecraftforge.client.event.RenderGameOverlayEvent;
+import net.minecraftforge.event.entity.EntityJoinWorldEvent;
+import net.minecraftforge.fml.common.FMLCommonHandler;
+import net.minecraftforge.fml.common.Loader;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
+import net.minecraftforge.fml.common.gameevent.TickEvent;
+import net.minecraftforge.fml.common.network.FMLNetworkEvent;
 import net.minecraftforge.fml.relauncher.Side;
 import net.minecraftforge.fml.relauncher.SideOnly;
+import net.minecraftforge.fml.server.FMLServerHandler;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,6 +50,10 @@ public class BlockDisplayEventBus {
     @SubscribeEvent
     @SideOnly(Side.CLIENT)
     public static void renderBlockDisplay(RenderGameOverlayEvent.Post event) {
+        if (Minecraft.getMinecraft().currentScreen != null) {
+            InternalIInventoryCache.lastFrameNoRender = true;
+            return;
+        }
         if (!BlockDisplay.active || RenderMelon.isF3ScreenEnabled() || Minecraft.getMinecraft().currentScreen != null) return;
         GlStateManager.pushMatrix();
         Minecraft mc = Minecraft.getMinecraft();
@@ -63,7 +75,7 @@ public class BlockDisplayEventBus {
         IBlockState state = world.getBlockState(pos);
         ItemStack display = state.getBlock().getPickBlock(state, result, world, pos, minecraft.player);
         if (!display.isEmpty()) {
-            boolean advanced = minecraft.gameSettings.advancedItemTooltips;
+            boolean advanced = BlockDisplayConfig.enforceAdvancedInfo || minecraft.gameSettings.advancedItemTooltips;
             MetaBlock block = MetaBlock.of(state);
             String name = APIBlockDisplay.hasCustomName(block) ? APIBlockDisplay.getMetaBlockName(block) : display.getDisplayName()
                     + (advanced ? (" (" + block.getBlock().getRegistryName() + "/" + block.getMetadata() + ")") : "");
@@ -80,8 +92,40 @@ public class BlockDisplayEventBus {
                     int y = 1;
                     font.drawStringWithShadow(name, x, 1, 0xffffffff);
                     y += 9;
-                    if (hasTE) {
+                    if (hasTE && advanced) {
                         font.drawStringWithShadow(InternalLangKeyCache.translate("info.block_display.has_te"), x, y, 0xffaaaaaa);
+                        y += 9;
+                    }
+                    if (!BlockDisplayConfig.disableMineableInfo) {
+                        String toolClass = BlockDisplay.getToolClass(world.getBlockState(pos));
+                        int toolLevel = BlockDisplay.getToolLevel(world.getBlockState(pos));
+                        boolean noTool;
+                        if ("null".equals(toolClass) || toolClass == null) {
+                            noTool = true;
+                            font.drawStringWithShadow(InternalLangKeyCache.translate("info.block_display.no_tool"), x, y, 0xffcccccc);
+                        } else {
+                            noTool = !"pickaxe".equals(toolClass);
+                            font.drawStringWithShadow(InternalLangKeyCache.translate("info.block_display.mining_level") + ": "
+                                    + toolClass + " lvl " + toolLevel, x, y, 0xffcccccc);
+                            ItemStack tool = getToolStack(toolClass, toolLevel);
+                            if (!tool.isEmpty()) {
+                                int w = (font.getStringWidth(InternalLangKeyCache.translate("info.block_display.mining_level") + ": "
+                                        + toolClass + " lvl " + toolLevel) + 20) * 2;
+                                GlStateManager.scale(0.5, 0.5, 0.5);
+                                RenderHelper.enableGUIStandardItemLighting();
+                                minecraft.getRenderItem().renderItemIntoGUI(tool, w, y * 2);
+                                RenderHelper.disableStandardItemLighting();
+                                GlStateManager.scale(2, 2, 2);
+                            }
+                        }
+                        y += 8;
+                        boolean mineable = (BlockDisplay.getToolClasses(minecraft.player.getHeldItem(EnumHand.MAIN_HAND)).contains(toolClass) &&
+                                BlockDisplay.getToolLevel(minecraft.player.getHeldItem(EnumHand.MAIN_HAND), toolClass, minecraft.player, world.getBlockState(pos)) >= toolLevel)
+                                || noTool;
+                        font.drawStringWithShadow(mineable ?
+                                        InternalLangKeyCache.translate("info.block_display.mineable") :
+                                        InternalLangKeyCache.translate("info.block_display.non_mineable"),
+                                x, y, mineable ? 0xffcccccc : 0xffffcccc);
                         y += 9;
                     }
                     if (hasAdditional) {
@@ -96,30 +140,50 @@ public class BlockDisplayEventBus {
                     try {
                         TileEntity te = world.getTileEntity(pos);
                         if (te instanceof IInventory) {
-                            BlockDisplay.network.sendToServer(new PacketRequestInventory(pos, world.provider.getDimension()));
-                            if (pos.toLong() != InternalIInventoryCache.pos.toLong()) {
-                                font.drawStringWithShadow("[!] " + InternalLangKeyCache.translate("info.block_display.inventory_warn"), x, y, 0xffff0000);
-                                y += 9;
-                            }
-                            List<ItemStack> stacks = InternalIInventoryCache.stacks;
-                            if (!stacks.isEmpty()) {
-                                y++;
-                                font.drawStringWithShadow(InternalLangKeyCache.translate("info.block_display.inventory") + ": ", x, y, 0xffeeeeee);
-                                y += 9;
-                                RenderHelper.enableGUIStandardItemLighting();
-                                RenderItem render = minecraft.getRenderItem();
-                                int sx = 0;
-                                for (ItemStack stack : stacks) {
-                                    if (sx > 5) {
-                                        sx = 0;
-                                        y += 17;
+                            if (InternalIInventoryCache.isIsLoadedOnServer()) {
+                                if (pos.toLong() != InternalIInventoryCache.pos.toLong()) {
+                                    font.drawStringWithShadow("[!] " + InternalLangKeyCache.translate("info.block_display.inventory_warn"), x, y, 0xffff0000);
+                                    y += 9;
+                                    InternalIInventoryCache.requestInventoryUpdate(world, pos);
+                                } else if (InternalIInventoryCache.lastFrameNoRender) {
+                                    InternalIInventoryCache.lastFrameNoRender = false;
+                                    InternalIInventoryCache.requestInventoryUpdate(world, pos);
+                                } else if (InternalIInventoryCache.requestCooldown <= 0)
+                                    InternalIInventoryCache.requestInventoryUpdate(world, pos);
+                                List<ItemStack> stacks = InternalIInventoryCache.stacks;
+                                FMLCommonHandler.instance().getMinecraftServerInstance().getOnlinePlayerNames();
+                                if (!stacks.isEmpty()) {
+                                    y++;
+                                    font.drawStringWithShadow(InternalLangKeyCache.translate("info.block_display.inventory") + ": ", x, y, 0xffeeeeee);
+                                    y += 9;
+                                    RenderHelper.enableGUIStandardItemLighting();
+                                    RenderItem render = minecraft.getRenderItem();
+                                    int sx = 0;
+                                    for (ItemStack stack : stacks) {
+                                        if (sx > 5) {
+                                            sx = 0;
+                                            y += 17;
+                                        }
+                                        render.renderItemIntoGUI(stack, x + sx * 17, y);
+                                        boolean rescale = stack.getCount() > 99;
+                                        if (rescale) {
+                                            GlStateManager.scale(0.5, 0.5, 0.5);
+                                            render.renderItemOverlays(font, stack, (x + sx * 17) * 2 + 16, y * 2 + 16);
+                                            GlStateManager.scale(2, 2, 2);
+                                        } else {
+                                            render.renderItemOverlays(font, stack, x + sx * 17, y);
+                                        }
+                                        sx++;
                                     }
-                                    render.renderItemIntoGUI(stack, x + sx * 17, y);
-                                    render.renderItemOverlays(font, stack, x + sx * 17, y);
-                                    sx++;
+                                    y += 17;
+                                    RenderHelper.disableStandardItemLighting();
                                 }
-                                RenderHelper.disableStandardItemLighting();
+                            } else {
+                                font.drawStringWithShadow(InternalLangKeyCache.translate("info.block_display.no_server"), x, y, 0xffff0000);
+                                y += 9;
                             }
+                        } else {
+                            InternalIInventoryCache.clear();
                         }
                     } catch (IndexOutOfBoundsException ignored) {
                     } catch (Throwable error) {
@@ -149,10 +213,61 @@ public class BlockDisplayEventBus {
     }
 
     @SideOnly(Side.CLIENT)
+    private static ItemStack getToolStack(String toolClass, int lvl) {
+        if ("pickaxe".equals(toolClass)) {
+            switch (lvl) {
+                case -1:
+                case 0: return new ItemStack(Items.WOODEN_PICKAXE);
+                case 1: return new ItemStack(Items.STONE_PICKAXE);
+                case 3: return new ItemStack(Items.DIAMOND_PICKAXE);
+                default: return new ItemStack(Items.IRON_PICKAXE);
+            }
+        }
+        if ("axe".equals(toolClass)) {
+            switch (lvl) {
+                case -1:
+                case 0: return new ItemStack(Items.WOODEN_AXE);
+                case 1: return new ItemStack(Items.STONE_AXE);
+                case 3: return new ItemStack(Items.DIAMOND_AXE);
+                default: return new ItemStack(Items.IRON_PICKAXE);
+            }
+        }
+        if ("shovel".equals(toolClass)) {
+            switch (lvl) {
+                case -1:
+                case 0: return new ItemStack(Items.WOODEN_SHOVEL);
+                case 1: return new ItemStack(Items.STONE_SHOVEL);
+                case 3: return new ItemStack(Items.DIAMOND_SHOVEL);
+                default: return new ItemStack(Items.IRON_SHOVEL);
+            }
+        }
+        if ("hoe".equals(toolClass)) {
+            switch (lvl) {
+                case -1:
+                case 0: return new ItemStack(Items.WOODEN_HOE);
+                case 1: return new ItemStack(Items.STONE_HOE);
+                case 3: return new ItemStack(Items.DIAMOND_HOE);
+                default: return new ItemStack(Items.IRON_HOE);
+            }
+        }
+        if ("sword".equals(toolClass)) {
+            switch (lvl) {
+                case -1:
+                case 0: return new ItemStack(Items.WOODEN_SWORD);
+                case 1: return new ItemStack(Items.STONE_SWORD);
+                case 3: return new ItemStack(Items.DIAMOND_SWORD);
+                default: return new ItemStack(Items.IRON_SWORD);
+            }
+        }
+        if ("shears".equals(toolClass)) return new ItemStack(Items.SHEARS);
+        return ItemStack.EMPTY;
+    }
+
+    @SideOnly(Side.CLIENT)
     private static void renderEntityInfo(Minecraft minecraft, World world, Entity entity, RayTraceResult result) {
         ItemStack display = entity.getPickedResult(result);
         String name = entity.getDisplayName().getFormattedText();
-        boolean advanced = minecraft.gameSettings.advancedItemTooltips;
+        boolean advanced = BlockDisplayConfig.enforceAdvancedInfo || minecraft.gameSettings.advancedItemTooltips;
         int x = display.isEmpty() ? 1 : 18;
         int y = 1;
         if (!display.isEmpty()) {
@@ -180,5 +295,30 @@ public class BlockDisplayEventBus {
             InternalLangKeyCache.clear();
             BlockDisplay.logger.info("Cleared InternalLangKeyCache!");
         }
+    }
+
+    @SubscribeEvent
+    public static void clientTick(TickEvent.ClientTickEvent event) {
+        InternalIInventoryCache.testServer();
+    }
+
+    @SubscribeEvent
+    public static void serverTick(TickEvent.ServerTickEvent event) {
+        InventoryPacketLimiter.receivedRequestThisTick = false;
+    }
+
+    @SubscribeEvent
+    public static void joinServer(FMLNetworkEvent.ClientConnectedToServerEvent event) {
+        BlockDisplay.logger.info("Joined server from client: {}", BlockDisplay.isClient());
+        InternalIInventoryCache.allowTesting = true;
+        InternalIInventoryCache.serverTestCooldown = 20;
+    }
+
+    @SubscribeEvent
+    public static void leaveServer(FMLNetworkEvent.ClientDisconnectionFromServerEvent event) {
+        BlockDisplay.logger.info("Left server from client: {}", BlockDisplay.isClient());
+        InternalIInventoryCache.allowTesting = false;
+        InternalIInventoryCache.serverTestCooldown = 20;
+        InternalIInventoryCache.revokeServerPresence();
     }
 }

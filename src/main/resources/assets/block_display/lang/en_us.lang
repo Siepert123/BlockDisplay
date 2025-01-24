@@ -5,6 +5,12 @@ info.block_display.entity_wip=[ENTITIES ARE WIP]
 info.block_display.inventory=Inventory
 info.block_display.inventory_warn=Inventory may not display correctly
 
+info.block_display.no_tool=No tool
+info.block_display.mineable=Mineable
+info.block_display.non_mineable=Not mineable
+info.block_display.mining_level=Required tool
+info.block_display.no_server=No server connection available
+
 entity.ItemFrame.name=Item Frame
 entity.LeashKnot.name=Leash Knot
 entity.MinecartRideable.name=Minecart

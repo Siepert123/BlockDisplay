@@ -42,6 +42,7 @@ public class PacketRequestInventory implements IMessage {
     public static class Handler implements IMessageHandler<PacketRequestInventory, PacketInventory> {
         @Override
         public PacketInventory onMessage(PacketRequestInventory message, MessageContext ctx) {
+            if (InventoryPacketLimiter.receivedRequestThisTick) return null;
             World world = FMLCommonHandler.instance().getMinecraftServerInstance().getWorld(message.dimension);
             TileEntity te = world.getTileEntity(message.pos);
             if (te instanceof IInventory) {
@@ -53,6 +54,7 @@ public class PacketRequestInventory implements IMessage {
                     if (stack.isEmpty()) continue;
                     stacks.add(stack);
                 }
+                InventoryPacketLimiter.receivedRequestThisTick = true;
                 return new PacketInventory(message.pos, stacks);
             }
             return null;
